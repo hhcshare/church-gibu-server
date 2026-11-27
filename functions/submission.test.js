@@ -37,7 +37,7 @@ function response() {
 }
 
 function request(body, options = {}) {
-    const headers = { origin: "https://example.test", "x-firebase-appcheck": "valid", ...options.headers };
+    const headers = { origin: "https://example.test", ...options.headers };
     return {
         method: options.method || "POST",
         body,
@@ -48,9 +48,6 @@ function request(body, options = {}) {
 function handler(db, options = {}) {
     return createSubmissionHandler({
         db,
-        verifyToken: options.verifyToken || (async token => {
-            if (token !== "valid") throw new Error("invalid token");
-        }),
         serverTimestamp: options.serverTimestamp || (() => "timestamp"),
         getAllowedOrigins: () => "https://example.test",
         logger: { warn() {}, error() {} }
@@ -94,15 +91,13 @@ test("invalid inputs, consent, personal number, and family data are rejected", a
     assert.equal((await call(fn, { requestId, submission: corporate })).statusCode, 200);
 });
 
-test("origin, method and App Check are enforced and failures are surfaced", async () => {
+test("origin and method are enforced and storage failures are surfaced", async () => {
     const db = createMemoryDb();
     const fn = handler(db);
     const body = { requestId, submission };
     assert.equal((await call(fn, body, { headers: { origin: "https://other.test" } })).statusCode, 403);
     assert.equal((await call(fn, body, { method: "OPTIONS" })).statusCode, 204);
     assert.equal((await call(fn, body, { method: "GET" })).statusCode, 405);
-    assert.equal((await call(fn, body, { headers: { "x-firebase-appcheck": "" } })).statusCode, 401);
-    assert.equal((await call(fn, body, { headers: { "x-firebase-appcheck": "invalid" } })).statusCode, 401);
     assert.equal(db.records.size, 0);
     const failing = handler({ ...db, runTransaction: async () => { throw new Error("unavailable"); } });
     assert.equal((await call(failing, body)).statusCode, 500);
@@ -143,7 +138,7 @@ test("Firestore emulator stores retries once and denies unauthenticated direct a
     }
 });
 
-test("Functions emulator enforces origin and App Check", {
+test("Functions emulator accepts token-free submissions and enforces origin", {
     skip: !process.env.TEST_FUNCTION_URL
 }, async () => {
     const url = process.env.TEST_FUNCTION_URL;
@@ -153,12 +148,24 @@ test("Functions emulator enforces origin and App Check", {
     });
     assert.equal(preflight.status, 204);
     assert.equal(preflight.headers.get("access-control-allow-origin"), "http://localhost:3000");
-    const unauthorized = await fetch(url, {
+    const accepted = await fetch(url, {
         method: "POST",
         headers: { Origin: "http://localhost:3000", "Content-Type": "application/json" },
         body: JSON.stringify({ requestId, submission })
     });
-    assert.equal(unauthorized.status, 401);
+    assert.equal(accepted.status, 200);
+    assert.deepEqual(await accepted.json(), { ok: true });
+    const { initializeApp, deleteApp } = require("firebase-admin/app");
+    const { getFirestore } = require("firebase-admin/firestore");
+    const app = initializeApp({ projectId: "demo-church-gibu" }, "http-test");
+    try {
+        const ref = getFirestore(app).collection("donationApplications").doc(requestId);
+        const snapshot = await ref.get();
+        assert.deepEqual(snapshot.data().submission, submission);
+        await ref.delete();
+    } finally {
+        await deleteApp(app);
+    }
     const forbidden = await fetch(url, {
         method: "POST",
         headers: { Origin: "https://other.test", "Content-Type": "application/json" },

@@ -61,7 +61,7 @@ function createRecordName(name, date) {
     return `${name}_${values.year}${values.month}${values.day}${values.hour}${values.minute}${values.second}`;
 }
 
-function createSubmissionHandler({ db, verifyToken, serverTimestamp, getAllowedOrigins, logger }) {
+function createSubmissionHandler({ db, serverTimestamp, getAllowedOrigins, logger }) {
     return async (req, res) => {
         const origins = (getAllowedOrigins() || "").split(",").map(value => value.trim()).filter(Boolean);
         const origin = req.get("Origin");
@@ -72,25 +72,13 @@ function createSubmissionHandler({ db, verifyToken, serverTimestamp, getAllowedO
         }
         res.set("Access-Control-Allow-Origin", origin);
         res.set("Access-Control-Allow-Methods", "POST, OPTIONS");
-        res.set("Access-Control-Allow-Headers", "Content-Type, X-Firebase-AppCheck");
+        res.set("Access-Control-Allow-Headers", "Content-Type");
         if (req.method === "OPTIONS") {
             res.status(204).end();
             return;
         }
         if (req.method !== "POST") {
             res.status(405).json({ error: "허용되지 않은 요청 방식입니다." });
-            return;
-        }
-        const token = req.get("X-Firebase-AppCheck");
-        if (!token) {
-            res.status(401).json({ error: "앱 확인에 실패했습니다." });
-            return;
-        }
-        try {
-            await verifyToken(token);
-        } catch (error) {
-            logger.warn("App Check token verification failed.");
-            res.status(401).json({ error: "앱 확인에 실패했습니다." });
             return;
         }
         const body = req.body;
